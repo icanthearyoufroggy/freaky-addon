@@ -3,7 +3,7 @@
   "id": "e621-hud",
   "version": "${version}",
   "name": "E621 hud",
-  "description": "An addon template for the Meteor addons.",
+  "description": "Admire great artworks from the comfort of Meteor Client.",
   "authors": [
     "AntiCope"
   ],
@@ -22,7 +22,7 @@
     "github:sha": "@gh_hash@"
   },
   "depends": {
-    "java": ">=17",
+    "java": ">=21",
     "minecraft": ">=@mc_version@",
     "meteor-client": "*"
   }
