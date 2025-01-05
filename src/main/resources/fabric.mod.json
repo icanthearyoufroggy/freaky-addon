@@ -8,7 +8,7 @@
     "AntiCope"
   ],
   "contact": {
-    "repo": "https://github.com/MeteorDevelopment/meteor-addon-template"
+    "repo": "https://github.com/AntiCope/meteor-e621-integration"
   },
   "icon": "assets/e621/icon.png",
   "environment": "client",

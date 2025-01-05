@@ -15,8 +15,12 @@ public abstract class Source {
 
     public enum SourceType {
         e621,
+        e926,
         gelbooru,
-        rule34
+        danbooru,
+        safebooru,
+        rule34,
+        nekoslife
     }
 
     protected final Random random = new Random();
@@ -36,10 +40,13 @@ public abstract class Source {
 
     public static Source getSource(SourceType type) {
         return switch (type) {
-            case e621 -> new ESixTwoOne();
-            case gelbooru -> new GelBooru("https://gelbooru.com/", 700);
-            case rule34 -> new GelBooru("https://api.rule34.xxx/", 700);
-            default -> null;
+            case e621 -> new ESixTwoOne("https://e621.net");
+            case e926 -> new ESixTwoOne("https://e926.net");
+            case gelbooru -> new GelBooru("https://gelbooru.com", 700);
+            case danbooru -> new DanBooru("https://danbooru.donmai.us", 700);
+            case safebooru -> new GelBooru("https://safebooru.org", 700);
+            case rule34 -> new GelBooru("https://api.rule34.xxx", 700);
+            case nekoslife -> new NekosLife("https://nekos.life");
         };
     }
 }
