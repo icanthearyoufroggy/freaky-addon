@@ -1,5 +1,7 @@
 # E621 hud element
 
+Check Releases for older versions
+
 <div align="center">
   <a href="https://discord.gg/9mrRPGKYU3"><img src="https://invidget.switchblade.xyz/9mrRPGKYU3"></a>
 </div>
