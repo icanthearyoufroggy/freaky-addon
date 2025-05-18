@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "e621-hud",
   "version": "${version}",
-  "name": "E621 hud",
+  "name": "MeteorAddon-E621 hud",
   "description": "Admire great artworks from the comfort of Meteor Client.",
   "authors": [
     "AntiCope"
