@@ -1,52 +1,24 @@
 package anticope.esixtwoone.sources;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.Random;
+import java.util.List;
 
-import anticope.esixtwoone.E621Hud;
+public interface Source {
+    enum Size { preview, sample, file }
+    enum SourceType { e621, e926, danbooru, gelbooru, nekoslife }
+    
+    List<String> getPageImageUrls(String filter, Size size, int page);
+    List<String> getAllImageUrls(String filter, Size size);
+    String randomImage(String filter, Size size);
+    void reset();
 
-public abstract class Source {
-    public enum Size {
-        preview,
-        sample,
-        file
-    }
-
-    public enum SourceType {
-        e621,
-        e926,
-        gelbooru,
-        danbooru,
-        safebooru,
-        rule34,
-        nekoslife
-    }
-
-    protected final Random random = new Random();
-
-    public abstract void reset();
-
-    protected abstract String randomImage(String filter, Size size);
-
-    public String getRandomImage(String filter, Size size) {
-        try {
-            return randomImage(URLEncoder.encode(filter, StandardCharsets.UTF_8), size);
-        } catch (Exception ex) {
-            E621Hud.LOG.error("Failed to fetch an image.", ex);
+    static Source getSource(SourceType type) {
+        switch (type) {
+            case e621: return new ESixTwoOne("https://e621.net");
+            case e926: return new ESixTwoOne("https://e926.net");
+            case danbooru: return new Danbooru("https://danbooru.donmai.us");
+            case gelbooru: return new Gelbooru("https://gelbooru.com");
+            case nekoslife: return new NekosLife();
+            default: throw new IllegalArgumentException("Unknown source type");
         }
-        return null;
-    }
-
-    public static Source getSource(SourceType type) {
-        return switch (type) {
-            case e621 -> new ESixTwoOne("https://e621.net");
-            case e926 -> new ESixTwoOne("https://e926.net");
-            case gelbooru -> new GelBooru("https://gelbooru.com", 700);
-            case danbooru -> new DanBooru("https://danbooru.donmai.us", 700);
-            case safebooru -> new GelBooru("https://safebooru.org", 700);
-            case rule34 -> new GelBooru("https://api.rule34.xxx", 700);
-            case nekoslife -> new NekosLife("https://nekos.life");
-        };
     }
 }

@@ -2,51 +2,83 @@ package anticope.esixtwoone.sources;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-
 import meteordevelopment.meteorclient.utils.network.Http;
 
-public class ESixTwoOne extends Source {
+import java.util.ArrayList;
+import java.util.List;
 
+public class ESixTwoOne implements Source {
     private final String domain;
+    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 
     public ESixTwoOne(String domain) {
         this.domain = domain;
     }
-    private int maxPage = 30;
 
     @Override
-    public void reset() {
-        maxPage = 30;
+    public List<String> getPageImageUrls(String filter, Size size, int page) {
+        List<String> urls = new ArrayList<>();
+        try {
+            String formattedTags = filter.trim()
+                .replace(" ", "+")
+                .replace(":", "%3A");
+
+            String url = String.format("%s/posts.json?tags=%s&limit=320&page=%d", 
+                domain, formattedTags, page);
+            
+            JsonObject result = Http.get(url)
+                .header("User-Agent", USER_AGENT)
+                .sendJson(JsonObject.class);
+
+            if (result == null || !result.has("posts")) {
+                return urls;
+            }
+
+            JsonArray posts = result.getAsJsonArray("posts");
+            for (int i = 0; i < posts.size(); i++) {
+                JsonObject post = posts.get(i).getAsJsonObject();
+                String urlStr = getUrlForSize(post, size);
+                if (urlStr != null && !isWebP(urlStr)) {
+                    urls.add(urlStr);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[E621] API error: " + e.getMessage());
+        }
+        return urls;
+    }
+
+    @Override
+    public List<String> getAllImageUrls(String filter, Size size) {
+        return getPageImageUrls(filter, size, 1); // Just get first page
     }
 
     @Override
     public String randomImage(String filter, Size size) {
-        if (maxPage < 1) maxPage = 1;
-        int pageNum = random.nextInt(1, maxPage + 1);
-        JsonObject result = Http.get(domain + "/posts.json?limit=320&tags="+filter+"&page="+ pageNum).sendJson(JsonObject.class);
-        if (result.get("posts") instanceof JsonArray array) {
-            if(array.size() <= 0) {
-                maxPage = pageNum - 1;
-                return null;
+        List<String> urls = getPageImageUrls(filter, size, 1);
+        return urls.isEmpty() ? null : urls.get(0);
+    }
+
+    @Override
+    public void reset() {
+        // Reset any internal state if needed
+    }
+
+    private String getUrlForSize(JsonObject post, Size size) {
+        if (post == null) return null;
+        try {
+            switch (size) {
+                case preview: return post.has("preview") ? post.getAsJsonObject("preview").get("url").getAsString() : null;
+                case sample: return post.has("sample") ? post.getAsJsonObject("sample").get("url").getAsString() : null;
+                case file: return post.has("file") ? post.getAsJsonObject("file").get("url").getAsString() : null;
+                default: return null;
             }
-            for (int tries = 0; tries < array.size(); tries++) {
-                JsonObject post = array.get(random.nextInt(array.size())).getAsJsonObject();
-            
-                if (!post.has(size.toString())) continue;
-            
-                JsonObject sizeObj = post.get(size.toString()).getAsJsonObject();
-            
-                if (!sizeObj.has("url")) continue;
-            
-                String url = sizeObj.get("url").getAsString();
-            
-                if (url.endsWith(".webm")) continue;
-            
-                return url;
-            }
-            return null; // no valid image found
-            
+        } catch (Exception e) {
+            return null;
         }
-        return null;
+    }
+
+    private boolean isWebP(String url) {
+        return url != null && url.toLowerCase().endsWith(".webp");
     }
 }
