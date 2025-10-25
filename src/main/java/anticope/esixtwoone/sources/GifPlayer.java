@@ -4,9 +4,14 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.util.Identifier;
-import javax.imageio.*;
-import javax.imageio.metadata.IIOMetadata;
+
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
+import javax.imageio.metadata.IIOMetadata;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -14,17 +19,15 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 
 public class GifPlayer {
     private static final boolean DEBUG = true;
-    
-    public final Identifier textureId;
-    private final List<NativeImageBackedTexture> frames = new ArrayList<>();
-    private final int[] delays;
-    private int currentFrame;
-    private long lastUpdateTime;
+
+    private final Identifier textureId;
+    private final List<NativeImageBackedTexture> frameTextures = new ArrayList<>();
+    private final List<Integer> delays = new ArrayList<>();
+    private int currentFrame = 0;
+    private long lastUpdateTime = 0L;
     private final MinecraftClient client;
     private final double aspectRatio;
     private boolean paused = false;
@@ -35,169 +38,157 @@ public class GifPlayer {
     public GifPlayer(InputStream gifStream, Identifier textureId, int reductionFactor) throws Exception {
         this.textureId = textureId;
         this.client = MinecraftClient.getInstance();
-        this.currentFrame = 0;
-        this.lastUpdateTime = System.currentTimeMillis();
         this.reductionFactor = Math.max(1, reductionFactor);
-        this.debugId = "GIF-" + System.currentTimeMillis();
+        this.debugId = "GifPlayer-" + System.currentTimeMillis();
+        if (DEBUG) {
+            System.out.printf("[%s] Creating GifPlayer (reduction=%d)%n", debugId, this.reductionFactor);
+        }
 
-        if (DEBUG) System.out.printf("[%s] Creating new GifPlayer (reduction: %d)%n", debugId, reductionFactor);
-
-        try (ImageInputStream stream = ImageIO.createImageInputStream(gifStream)) {
+        try (ImageInputStream imgStream = ImageIO.createImageInputStream(gifStream)) {
             Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName("gif");
             if (!readers.hasNext()) {
-                throw new Exception("No GIF reader available");
+                throw new Exception("No GIF ImageReader found");
+            }
+            ImageReader reader = readers.next();
+            reader.setInput(imgStream, false, false);
+
+            int total = Math.min(reader.getNumImages(true), MAX_FRAMES);
+            if (DEBUG) {
+                System.out.printf("[%s] Frame count (capped): %d%n", debugId, total);
             }
 
-            ImageReader reader = readers.next();
-            reader.setInput(stream);
+            // load first frame to determine aspect ratio
+            NativeImage firstImg = decodeReduced(reader, 0, this.reductionFactor);
+            this.aspectRatio = (double) firstImg.getHeight() / firstImg.getWidth();
+            frameTextures.add(new NativeImageBackedTexture(firstImg));
+            delays.add(getFrameDelay(reader.getImageMetadata(0)));
+            if (DEBUG) {
+                System.out.printf("[%s] Loaded frame 0 (size=%dx%d, delay=%dms)%n", debugId,
+                    firstImg.getWidth(), firstImg.getHeight(), delays.get(0));
+            }
 
-            int frameCount = Math.min(reader.getNumImages(true), MAX_FRAMES);
-            this.delays = new int[frameCount];
-            
-            if (DEBUG) System.out.printf("[%s] Loading %d frames%n", debugId, frameCount);
-
-            // Load first frame
-            NativeImage firstFrame = readReducedFrame(reader, 0, this.reductionFactor);
-            this.aspectRatio = (double)firstFrame.getHeight() / firstFrame.getWidth();
-            frames.add(new NativeImageBackedTexture(firstFrame));
-            delays[0] = getFrameDelay(reader.getImageMetadata(0));
-            if (DEBUG) System.out.printf("[%s] Loaded frame 0 (%dx%d, delay: %dms)%n", 
-                debugId, firstFrame.getWidth(), firstFrame.getHeight(), delays[0]);
-
-            // Load remaining frames
-            for (int i = 1; i < frameCount; i++) {
+            // load remaining frames
+            for (int i = 1; i < total; i++) {
                 long freeMem = Runtime.getRuntime().freeMemory();
-                if (freeMem < 50 * 1024 * 1024) {
-                    if (DEBUG) System.out.printf("[%s] Low memory (%.1fMB free), stopping frame loading%n", 
-                        debugId, freeMem / (1024f * 1024f));
+                if (freeMem < 50L * 1024L * 1024L) {
+                    if (DEBUG) {
+                        System.out.printf("[%s] Low memory (%.1fMB free) — stopping frame load at index %d%n", debugId,
+                            freeMem / (1024f * 1024f), i);
+                    }
                     break;
                 }
-                
-                NativeImage frame = readReducedFrame(reader, i, this.reductionFactor);
-                frames.add(new NativeImageBackedTexture(frame));
-                delays[i] = getFrameDelay(reader.getImageMetadata(i));
-                if (DEBUG) System.out.printf("[%s] Loaded frame %d (%dx%d, delay: %dms)%n", 
-                    debugId, i, frame.getWidth(), frame.getHeight(), delays[i]);
+                NativeImage img = decodeReduced(reader, i, this.reductionFactor);
+                frameTextures.add(new NativeImageBackedTexture(img));
+                int delay = getFrameDelay(reader.getImageMetadata(i));
+                delays.add(delay);
+                if (DEBUG) {
+                    System.out.printf("[%s] Loaded frame %d (size=%dx%d, delay=%dms)%n", debugId,
+                        i, img.getWidth(), img.getHeight(), delay);
+                }
             }
 
             reader.dispose();
-            if (DEBUG) System.out.printf("[%s] Successfully loaded %d/%d frames%n", 
-                debugId, frames.size(), frameCount);
-        } catch (Exception e) {
-            if (DEBUG) System.err.printf("[%s] Error loading GIF: %s%n", debugId, e.getMessage());
-            throw e;
+            if (DEBUG) {
+                System.out.printf("[%s] Finished loading %d frames%n", debugId, frameTextures.size());
+            }
         }
+
+        this.lastUpdateTime = System.currentTimeMillis();
+        // register initial texture
+        client.getTextureManager().registerTexture(textureId, frameTextures.get(currentFrame));
     }
 
-    private NativeImage readReducedFrame(ImageReader reader, int index, int reduction) throws Exception {
-        if (DEBUG) System.out.printf("[%s] Decoding frame %d (reduction: %d)%n", debugId, index, reduction);
-        
+    private NativeImage decodeReduced(ImageReader reader, int index, int reduction) throws Exception {
+        if (DEBUG) {
+            System.out.printf("[%s] Decoding frame index %d (reduction=%d)%n", debugId, index, reduction);
+        }
         BufferedImage original = reader.read(index);
-        int newWidth = original.getWidth() / reduction;
-        int newHeight = original.getHeight() / reduction;
-        
-        BufferedImage reduced = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_ARGB);
-        reduced.getGraphics().drawImage(
-            original.getScaledInstance(newWidth, newHeight, BufferedImage.SCALE_SMOOTH), 
+        int newW = original.getWidth() / reduction;
+        int newH = original.getHeight() / reduction;
+        BufferedImage resized = new BufferedImage(newW, newH, BufferedImage.TYPE_INT_ARGB);
+        resized.getGraphics().drawImage(original.getScaledInstance(newW, newH, BufferedImage.SCALE_SMOOTH),
             0, 0, null);
-        
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(reduced, "png", baos);
-        byte[] imageData = baos.toByteArray();
-        baos.close();
-        
-        ByteArrayInputStream bais = new ByteArrayInputStream(imageData);
-        NativeImage nativeImage = NativeImage.read(bais);
-        bais.close();
-        
-        return nativeImage;
+
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            ImageIO.write(resized, "png", baos);
+            byte[] data = baos.toByteArray();
+            try (ByteArrayInputStream bais = new ByteArrayInputStream(data)) {
+                return NativeImage.read(bais);
+            }
+        }
     }
 
     public void setPaused(boolean paused) {
         this.paused = paused;
         if (!paused) {
-            lastUpdateTime = System.currentTimeMillis();
+            this.lastUpdateTime = System.currentTimeMillis();
         }
     }
 
+    /** Call this each tick/render or appropriate update loop. */
     public void update() {
-        if (paused || frames.isEmpty() || frames.size() <= 1) return;
-        
+        if (paused || frameTextures.isEmpty()) {
+            return;
+        }
+
         long now = System.currentTimeMillis();
-        if (now - lastUpdateTime >= delays[currentFrame]) {
-            int prevFrame = currentFrame;
-            currentFrame = (currentFrame + 1) % frames.size();
-            lastUpdateTime = now;
-            
-            if (DEBUG && currentFrame == 0) {
-                System.out.printf("[%s] Looping animation (frame %d -> 0)%n", debugId, prevFrame);
+        int delay = delays.get(currentFrame);
+        if (now - lastUpdateTime >= delay) {
+            int previous = currentFrame;
+            currentFrame++;
+            if (currentFrame >= frameTextures.size()) {
+                currentFrame = 0;  // **loop back to first frame**
+                if (DEBUG) {
+                    System.out.printf("[%s] Looping back to start (frame %d -> %d)%n", debugId, previous, currentFrame);
+                }
             }
-            
-            client.getTextureManager().registerTexture(textureId, frames.get(currentFrame));
+            lastUpdateTime = now;
+
+            // register the new texture frame
+            client.getTextureManager().registerTexture(textureId, frameTextures.get(currentFrame));
+            if (DEBUG) {
+                System.out.printf("[%s] Switched to frame %d%n", debugId, currentFrame);
+            }
         }
     }
 
     public void destroy() {
         if (client == null) return;
-        
-        if (DEBUG) System.out.printf("[%s] Destroying GifPlayer%n", debugId);
-        
+        if (DEBUG) {
+            System.out.printf("[%s] Destroying GifPlayer and cleaning up textures%n", debugId);
+        }
+
         client.execute(() -> {
-            try {
-                if (DEBUG) System.out.printf("[%s] Starting texture cleanup on render thread%n", debugId);
-                
-                int destroyedFrames = 0;
-                for (NativeImageBackedTexture texture : frames) {
-                    try {
-                        if (texture != null && texture.getGlId() != 0) {
-                            texture.close();
-                            destroyedFrames++;
-                        }
-                    } catch (Exception e) {
-                        System.err.printf("[%s] Error closing frame texture: %s%n", debugId, e.getMessage());
+            int destroyed = 0;
+            for (NativeImageBackedTexture tex : frameTextures) {
+                try {
+                    if (tex != null && tex.getGlId() != 0) {
+                        tex.close();
+                        destroyed++;
                     }
+                } catch (Exception e) {
+                    System.err.printf("[%s] Error closing texture: %s%n", debugId, e.getMessage());
                 }
-                frames.clear();
-                
-                if (DEBUG) System.out.printf("[%s] Destroyed %d frame textures%n", debugId, destroyedFrames);
-                
-                if (textureId != null && client.getTextureManager() != null) {
-                    try {
-                        if (client.getTextureManager().getTexture(textureId) != null) {
-                            client.getTextureManager().destroyTexture(textureId);
-                            if (DEBUG) System.out.printf("[%s] Destroyed main texture%n", debugId);
-                        }
-                    } catch (Exception e) {
-                        System.err.printf("[%s] Error destroying texture: %s%n", debugId, e.getMessage());
+            }
+            frameTextures.clear();
+
+            if (textureId != null && client.getTextureManager().getTexture(textureId) != null) {
+                try {
+                    client.getTextureManager().destroyTexture(textureId);
+                    if (DEBUG) {
+                        System.out.printf("[%s] Destroyed main texture %s%n", debugId, textureId);
                     }
+                } catch (Exception e) {
+                    System.err.printf("[%s] Error destroying main texture: %s%n", debugId, e.getMessage());
                 }
-            } catch (Exception e) {
-                System.err.printf("[%s] Error during destroy: %s%n", debugId, e.getMessage());
+            }
+            if (DEBUG) {
+                System.out.printf("[%s] Cleanup complete — destroyed %d frame textures%n", debugId, destroyed);
             }
         });
     }
 
     public double getAspectRatio() {
         return aspectRatio;
-    }
-
-    private int getFrameDelay(IIOMetadata metadata) {
-        try {
-            Node root = metadata.getAsTree(metadata.getNativeMetadataFormatName());
-            NodeList children = root.getChildNodes();
-            for (int i = 0; i < children.getLength(); i++) {
-                Node node = children.item(i);
-                if (node.getNodeName().equalsIgnoreCase("GraphicControlExtension")) {
-                    Node delay = node.getAttributes().getNamedItem("delayTime");
-                    if (delay != null) {
-                        return Math.max(20, Integer.parseInt(delay.getNodeValue()) * 10);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[GifPlayer] Error reading frame delay:");
-            e.printStackTrace();
-        }
-        return 100;
     }
 }
