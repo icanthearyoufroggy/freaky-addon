@@ -1,8 +1,6 @@
 package anticope.esixtwoone.sources;
 
 import net.minecraft.client.texture.NativeImage;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -20,27 +18,27 @@ import java.util.List;
 
 public class GifDecoder {
     public static List<GifFrame> readGifFrames(InputStream inputStream) throws IOException {
-        try (ImageInputStream stream = ImageIO.createImageInputStream(inputStream)) {
+        try (ImageInputStream imgStream = ImageIO.createImageInputStream(inputStream)) {
             Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName("gif");
             if (!readers.hasNext()) {
                 throw new IOException("No GIF ImageReader found");
             }
-
             ImageReader reader = readers.next();
-            reader.setInput(stream);
+            reader.setInput(imgStream, false, false);
 
-            int numFrames = reader.getNumImages(true);
-            List<GifFrame> frames = new ArrayList<>(numFrames);
+            int frameCount = reader.getNumImages(true);
+            List<GifFrame> frames = new ArrayList<>(frameCount);
 
-            for (int i = 0; i < numFrames; i++) {
+            for (int i = 0; i < frameCount; i++) {
                 try {
-                    BufferedImage frame = reader.read(i);
+                    BufferedImage buf = reader.read(i);
                     IIOMetadata metadata = reader.getImageMetadata(i);
                     int delay = getFrameDelay(metadata);
-                    NativeImage nativeImage = bufferedImageToNativeImage(frame);
-                    frames.add(new GifFrame(nativeImage, delay));
+
+                    NativeImage nativeImg = bufferedImageToNativeImage(buf);
+                    frames.add(new GifFrame(nativeImg, delay));
                 } catch (Exception e) {
-                    throw new IOException("Failed to read frame " + i, e);
+                    throw new IOException("Failed to read GIF frame index " + i, e);
                 }
             }
 
@@ -50,41 +48,51 @@ public class GifDecoder {
     }
 
     private static int getFrameDelay(IIOMetadata metadata) {
-        String metaFormat = metadata.getNativeMetadataFormatName();
-        if (metaFormat == null) {
-            return 100; // Default delay
-        }
-
-        IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(metaFormat);
-        NodeList children = root.getElementsByTagName("GraphicControlExtension");
-        if (children.getLength() == 0) {
+        String format = metadata.getNativeMetadataFormatName();
+        if (format == null) {
             return 100;
         }
-
-        Node child = children.item(0);
-        Node delayNode = child.getAttributes().getNamedItem("delayTime");
-        if (delayNode == null) {
+        IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(format);
+        // look for GraphicControlExtension
+        IIOMetadataNode gceNode = null;
+        for (int i = 0; i < root.getLength(); i++) {
+            if (root.item(i) instanceof IIOMetadataNode) {
+                IIOMetadataNode node = (IIOMetadataNode) root.item(i);
+                if ("GraphicControlExtension".equals(node.getNodeName())) {
+                    gceNode = node;
+                    break;
+                }
+            }
+        }
+        if (gceNode == null) {
             return 100;
         }
-
+        String delayValue = gceNode.getAttribute("delayTime");
+        if (delayValue == null || delayValue.isEmpty()) {
+            return 100;
+        }
         try {
-            int delay = Integer.parseInt(delayNode.getNodeValue()) * 10;
-            return delay < 20 ? 100 : delay; // Enforce minimum delay
+            int hundredths = Integer.parseInt(delayValue);
+            int ms = hundredths * 10;
+            return ms < 20 ? 100 : ms;
         } catch (NumberFormatException e) {
             return 100;
         }
     }
 
-    private static NativeImage bufferedImageToNativeImage(BufferedImage bufferedImage) throws IOException {
+    private static NativeImage bufferedImageToNativeImage(BufferedImage buf) throws IOException {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            ImageIO.write(bufferedImage, "png", baos);
-            return NativeImage.read(new ByteArrayInputStream(baos.toByteArray()));
+            ImageIO.write(buf, "png", baos);
+            byte[] bytes = baos.toByteArray();
+            try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes)) {
+                return NativeImage.read(bais);
+            }
         }
     }
 
     public static class GifFrame {
         public final NativeImage image;
-        public final int delay; // in milliseconds
+        public final int delay; // milliseconds
 
         public GifFrame(NativeImage image, int delay) {
             this.image = image;
